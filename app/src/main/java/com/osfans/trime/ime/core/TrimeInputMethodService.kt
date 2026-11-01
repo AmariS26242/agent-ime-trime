@@ -671,6 +671,9 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
         inputView?.toggleAgentPanel()
     }
 
+    /** 面板设置态：键盘输入走原样 ASCII 直通（见 CommonKeyboardActionListener.handlePanelKey）。 */
+    fun isPanelSettingsOpen(): Boolean = inputView?.isPanelSettingsOpen() == true
+
     /**
      * 只把「密码类」输入域视为敏感域。
      *

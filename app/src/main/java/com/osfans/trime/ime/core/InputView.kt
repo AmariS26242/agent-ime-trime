@@ -333,8 +333,10 @@ class InputView(
         service.onAgentPanelVisibilityChanged()
     }
 
-    /** 面板顶部在窗口中的 Y 坐标（面板不可见时返回 null）。 */
-    fun agentPanelTopInWindow(): Int? {
+    /** 面板是否处于「设置」态（此时键盘输入按原样 ASCII 进面板，不走 rime 组合）。 */
+    fun isPanelSettingsOpen(): Boolean = agentPanel.isOpen && agentPanel.isSettingsOpen
+
+    /** 面板顶部在窗口中的 Y 坐标（面板不可见时返回 null）。 */    fun agentPanelTopInWindow(): Int? {
         if (agentPanel.root.visibility != View.VISIBLE) return null
         val loc = IntArray(2)
         agentPanel.root.getLocationInWindow(loc)

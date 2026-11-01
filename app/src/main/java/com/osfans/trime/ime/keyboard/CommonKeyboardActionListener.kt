@@ -8,6 +8,7 @@ package com.osfans.trime.ime.keyboard
 import android.app.Dialog
 import android.content.Intent
 import android.view.ContextThemeWrapper
+import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.widget.Toast
 import androidx.lifecycle.lifecycleScope
@@ -158,6 +159,27 @@ class CommonKeyboardActionListener(override val di: DI) : DIAware {
              */
             private fun handlePanelKey(action: KeyAction): Boolean {
                 val composing = rime.run { statusCached.isComposing }
+                // 面板设置态要输入 URL/令牌，必须原样 ASCII，绕过 rime 拼音组合
+                if (service.isPanelSettingsOpen()) {
+                    when (action.code) {
+                        KeyEvent.KEYCODE_ENTER -> {
+                            service.panelSubmitSink?.invoke()
+                            return true
+                        }
+
+                        KeyEvent.KEYCODE_DEL -> {
+                            service.panelBackspaceSink?.invoke()
+                            return true
+                        }
+                    }
+                    val ch =
+                        KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD)
+                            .get(action.code, action.modifier)
+                    if (ch != 0 && ch in 0x20..0x7e) {
+                        service.commitText(ch.toChar().toString())
+                        return true
+                    }
+                }
                 return when {
                     action.commit.isNotEmpty() -> {
                         service.commitText(action.commit)
