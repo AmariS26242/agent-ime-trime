@@ -197,9 +197,11 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
         // ensure theme and color managers are initialized after rime is ready
         lifecycleScope.launch {
             rime.runOnReady {
+                Timber.i("agentime: rime ready, initializing theme managers")
                 ThemeManager.init(resources.configuration)
                 ThemeManager.addOnChangedListener(onThemeChangeListener)
                 ColorManager.addOnChangedListener(onColorChangeListener)
+                Timber.i("agentime: theme managers initialized, currentScope=%s", ColorManager.currentScope())
             }
         }
         InputFeedbackManager.init(this)
@@ -527,21 +529,40 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
         if (scope == null) {
             Timber.w("ThemeScope is not ready yet; deferring input view creation")
             // 修复：rime 尚未就绪时 onCreateInputView 返回 null 后不会自动重试，
-            // 结果是窗口一直空白。这里在 rime 就绪后补建输入视图。
-            lifecycleScope.launch {
-                rime.runOnReady {
-                    val ready = themeScope ?: return@runOnReady
-                    if (inputView == null) {
-                        Timber.i("agentime: creating deferred input view")
-                        replaceInputViews(ready)
-                    }
-                }
-            }
+            // 结果是窗口一直空白。这里用 Handler 轮询 themeScope，就绪后补建输入视图。
+            ensureDeferredInputView()
             return null
         }
         replaceInputViews(scope)
         // We will call `setInputView` by ourselves. This is fine.
         return null
+    }
+
+    /** 轮询等待 ThemeScope 就绪并补建输入视图（最多 30s）。 */
+    private fun ensureDeferredInputView() {
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        val startAt = android.os.SystemClock.elapsedRealtime()
+        val poll = object : Runnable {
+            override fun run() {
+                val ready = themeScope
+                if (ready != null) {
+                    if (inputView == null) {
+                        val waited = android.os.SystemClock.elapsedRealtime() - startAt
+                        Timber.i("agentime: creating deferred input view after %d ms", waited)
+                        replaceInputViews(ready)
+                        onAgentPanelVisibilityChanged()
+                    }
+                    return
+                }
+                val waited = android.os.SystemClock.elapsedRealtime() - startAt
+                if (waited > 30_000L) {
+                    Timber.e("agentime: theme still not ready after %d ms, giving up", waited)
+                    return
+                }
+                handler.postDelayed(this, 300L)
+            }
+        }
+        handler.postDelayed(poll, 300L)
     }
 
     override fun setInputView(view: View) {

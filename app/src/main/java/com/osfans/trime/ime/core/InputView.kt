@@ -132,6 +132,7 @@ class InputView(
 
     /** Agent panel shown above the keyboard, see [showAgentPanel]. */
     private val agentPanel = AgentPanel(this, scope)
+    private val agentClient = com.osfans.trime.ime.agent.AgentClient()
 
     private val candidatesMode by AppPrefs.defaultInstance().candidates.mode
 
@@ -287,6 +288,7 @@ class InputView(
         agentPanel.onInsert = { insertAgentAnswer(it) }
         agentPanel.onUndo = { undoAgentAnswer() }
         agentPanel.onClose = { hideAgentPanel() }
+        agentPanel.onCancel = { cancelAgentRequest() }
         agentPanel.root.post {
             val r = android.graphics.Rect()
             agentPanel.root.getGlobalVisibleRect(r)
@@ -334,6 +336,7 @@ class InputView(
     }
 
     fun hideAgentPanel() {
+        agentClient.cancel()
         agentPanel.hide()
         service.panelTextSink = null
         service.panelBackspaceSink = null
@@ -356,8 +359,29 @@ class InputView(
             agentPanel.setStatus("先输入一个问题，再发送")
             return
         }
-        agentPanel.setStatus("本地回环（尚未接入模型）")
-        agentPanel.setAnswer("收到问题：「$question」\n\n里程碑 1：Agent 面板与输入回环已打通，下一步接入后端模型。")
+        agentPanel.beginStreaming("正在请求…")
+        agentClient.ask(
+            question = question,
+            onDelta = { piece -> agentPanel.appendAnswer(piece) },
+            onDone = {
+                agentPanel.endStreaming(
+                    if (agentPanel.answerText().isBlank()) {
+                        "模型没有返回内容"
+                    } else {
+                        "已生成，可点「插入」写入输入框"
+                    },
+                )
+            },
+            onError = { message ->
+                agentPanel.endStreaming("失败：$message")
+            },
+        )
+    }
+
+    private fun cancelAgentRequest() {
+        if (!agentPanel.isStreaming) return
+        agentClient.cancel()
+        agentPanel.endStreaming("已取消")
     }
 
     private fun insertAgentAnswer(text: String) {

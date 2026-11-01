@@ -11,6 +11,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Agent 面板通过本机后端代理访问模型；APK 内不含上游 Key -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <queries>
         <intent>
@@ -29,6 +31,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
         android:roundIcon="@mipmap/ic_app_icon_round"
         android:theme="@style/Theme.TrimeAppTheme"
         android:hasFragileUserData="true"
+        android:usesCleartextTraffic="true"
         tools:targetApi="29">
 
         <service
