@@ -25,22 +25,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * Callbacks are always delivered on the main thread.
  */
-class AgentClient(
-    private val endpoint: String = DEFAULT_ENDPOINT,
-    private val token: String = DEFAULT_TOKEN,
-) {
+class AgentClient {
     companion object {
         private const val TAG = "AgentClient"
-
-        /**
-         * Backend endpoint. With `adb reverse tcp:8787 tcp:8787` (or on a real
-         * device over USB) the loopback address reaches the host backend.
-         * For Wi-Fi testing replace this with the host LAN IP.
-         */
-        const val DEFAULT_ENDPOINT = "http://127.0.0.1:8787/v1/chat/stream"
-
-        /** Shared dev token; must match CLIENT_TOKEN of the backend process. */
-        const val DEFAULT_TOKEN = "dev-agentime-token"
 
         private const val CONNECT_TIMEOUT_MS = 10_000
         private const val READ_TIMEOUT_MS = 45_000
@@ -104,6 +91,8 @@ class AgentClient(
         onDone: () -> Unit,
         onError: (String) -> Unit,
     ) {
+        val endpoint = AgentConfig.endpoint()
+        val token = AgentConfig.token()
         val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = CONNECT_TIMEOUT_MS

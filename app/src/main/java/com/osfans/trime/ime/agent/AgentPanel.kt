@@ -25,6 +25,10 @@ import com.osfans.trime.ime.core.InputView
  * [question] by [com.osfans.trime.ime.core.TrimeInputMethodService] through
  * `panelTextSink` instead of being written to the host editor. Only
  * [insertAnswer] hands text back to the host input connection.
+ *
+ * The panel also hosts the backend settings (endpoint / token). Because the
+ * panel has no input connection of its own, its "input fields" are selectable
+ * TextViews: tap one, then use the same keyboard to type into it.
  */
 class AgentPanel(
     host: InputView,
@@ -32,9 +36,14 @@ class AgentPanel(
 ) {
     private val context = host.themedContext
     private val density = context.resources.displayMetrics.density
-    private val scaledDensity = context.resources.displayMetrics.scaledDensity
+
+    private enum class Field { QUESTION, ENDPOINT, TOKEN }
 
     private val question = StringBuilder()
+    private val endpointBuf = StringBuilder(AgentConfig.endpoint())
+    private val tokenBuf = StringBuilder(AgentConfig.token())
+    private var field = Field.QUESTION
+    private var settingsOpen = false
     private var answer: String = ""
     private var status: String = ""
 
@@ -48,6 +57,9 @@ class AgentPanel(
     var onClose: (() -> Unit)? = null
     var onCancel: (() -> Unit)? = null
 
+    /** 保存后端设置（地址, 令牌）。 */
+    var onSaveSettings: ((String, String) -> Unit)? = null
+
     /** 敏感输入域里面板只显示说明，不接受输入、不允许写入。 */
     private var blocked = false
 
@@ -55,6 +67,10 @@ class AgentPanel(
         TextView(context).apply {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
             setPadding(dp(10), dp(6), dp(10), dp(6))
+            setOnClickListener {
+                field = Field.QUESTION
+                render()
+            }
         }
 
     private val answerView =
@@ -89,29 +105,96 @@ class AgentPanel(
             )
         }
 
+    // ---- 设置区（后端地址 / 令牌） ----
+
+    private val settingsLabelStyle: TextView.() -> Unit = {
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+        setTextColor(subTextColor)
+        setPadding(dp(10), dp(4), dp(10), 0)
+    }
+
+    private val endpointLabel = TextView(context).apply { text = "后端地址（点下面这一行选中，再用键盘输入 / 退格）"; settingsLabelStyle() }
+    private val endpointView =
+        TextView(context).apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            setOnClickListener {
+                field = Field.ENDPOINT
+                render()
+            }
+        }
+    private val tokenLabel = TextView(context).apply { text = "客户端令牌"; settingsLabelStyle() }
+    private val tokenView =
+        TextView(context).apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            setOnClickListener {
+                field = Field.TOKEN
+                render()
+            }
+        }
+    private val settingsHint =
+        TextView(context).apply {
+            text = "地址形如 http://电脑IP:8787/v1/chat/stream；手机与电脑需在同一 Wi-Fi。改完按 Enter 或点「保存」。"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setTextColor(subTextColor)
+            setPadding(dp(10), dp(2), dp(10), dp(6))
+        }
+    private val saveButton = panelButton("保存")
+    private val backButton = panelButton("返回问答")
+
+    private val settingsSection =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(endpointLabel, matchWidth(wrapContent()))
+            addView(endpointView, matchWidth(wrapContent()))
+            addView(tokenLabel, matchWidth(wrapContent()))
+            addView(tokenView, matchWidth(wrapContent()))
+            addView(settingsHint, matchWidth(wrapContent()))
+            addView(
+                LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    addButton(saveButton)
+                    addButton(backButton)
+                },
+                matchWidth(wrapContent()),
+            )
+            visibility = View.GONE
+        }
+
+    private val buttonRowView =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(2), 0, 0)
+            addButton(sendButton)
+            addButton(insertButton)
+            addButton(undoButton)
+            addButton(clearButton)
+            addButton(cancelButton)
+        }
+
     val root: View =
         LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             background = panelBackground()
             setPadding(dp(8), dp(4), dp(8), dp(6))
             addView(buildHeader(), matchWidth(wrapContent()))
+            addView(settingsSection, matchWidth(wrapContent()))
             addView(questionView, matchWidth(wrapContent()))
             addView(
                 answerScroll,
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(140)),
             )
             addView(statusView, matchWidth(wrapContent()))
-            addView(buildButtonRow(), matchWidth(wrapContent()))
+            addView(buttonRowView, matchWidth(wrapContent()))
             visibility = View.GONE
         }
 
     init {
-        root.setOnTouchListener { _, event ->
-            android.util.Log.i("AgentDbg", "panelTouch action=${event.action} x=${event.x} y=${event.y}")
-            false
-        }
         sendButton.setOnClickListener {
-            android.util.Log.i("AgentDbg", "click send q=${question}")
+            android.util.Log.i("AgentDbg", "click send q=$question")
             val text = question.toString().trim()
             if (text.isEmpty()) {
                 setStatus("先输入一个问题，再发送")
@@ -130,7 +213,6 @@ class AgentPanel(
         }
         clearButton.setOnClickListener {
             android.util.Log.i("AgentDbg", "click clear")
-            // 生成中清空 = 先取消请求，避免回答继续写进已清空的面板
             if (streaming) onCancel?.invoke()
             question.setLength(0)
             answer = ""
@@ -145,6 +227,8 @@ class AgentPanel(
             android.util.Log.i("AgentDbg", "click cancel")
             onCancel?.invoke()
         }
+        saveButton.setOnClickListener { saveSettings() }
+        backButton.setOnClickListener { closeSettings() }
         refreshColors()
         render()
     }
@@ -165,6 +249,15 @@ class AgentPanel(
             )
             addView(
                 TextView(context).apply {
+                    text = "设置"
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                    setPadding(dp(8), dp(2), dp(8), dp(2))
+                    setTextColor(subTextColor)
+                    setOnClickListener { toggleSettings() }
+                },
+            )
+            addView(
+                TextView(context).apply {
                     text = "关闭"
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
                     setPadding(dp(8), dp(2), dp(8), dp(2))
@@ -172,18 +265,6 @@ class AgentPanel(
                     setOnClickListener { onClose?.invoke() }
                 },
             )
-        }
-
-    private fun buildButtonRow(): View =
-        LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(2), 0, 0)
-            addButton(sendButton)
-            addButton(insertButton)
-            addButton(undoButton)
-            addButton(clearButton)
-            addButton(cancelButton)
         }
 
     private fun LinearLayout.addButton(button: TextView) {
@@ -204,6 +285,7 @@ class AgentPanel(
         }
 
     private fun render() {
+        // 问答区
         questionView.text = question.toString().ifEmpty { "用键盘输入问题…" }
         questionView.setTextColor(if (question.isEmpty()) subTextColor else textColor)
         answerView.text = answer
@@ -213,7 +295,30 @@ class AgentPanel(
         cancelButton.visibility = if (streaming) View.VISIBLE else View.GONE
         sendButton.isEnabled = !streaming && !blocked
         sendButton.alpha = if (streaming) 0.4f else 1f
+
+        // 设置区
+        val settingsVisibility = if (settingsOpen) View.VISIBLE else View.GONE
+        settingsSection.visibility = settingsVisibility
+        questionView.visibility = if (settingsOpen) View.GONE else View.VISIBLE
+        answerScroll.visibility = if (settingsOpen) View.GONE else View.VISIBLE
+        buttonRowView.visibility = if (settingsOpen) View.GONE else View.VISIBLE
+        if (settingsOpen) {
+            endpointView.text = endpointBuf.toString().ifEmpty { "（空，使用默认）" }
+            tokenView.text = tokenBuf.toString().ifEmpty { "（空，使用默认）" }
+            endpointView.setTextColor(if (endpointBuf.isEmpty()) subTextColor else textColor)
+            tokenView.setTextColor(if (tokenBuf.isEmpty()) subTextColor else textColor)
+            endpointView.background = fieldBackground(selected = field == Field.ENDPOINT)
+            tokenView.background = fieldBackground(selected = field == Field.TOKEN)
+        }
     }
+
+    private fun fieldBackground(selected: Boolean): GradientDrawable =
+        GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dp(6).toFloat()
+            setColor(colorOf({ scope.colors.candidateBackground }, 0xFF23262B.toInt()))
+            setStroke(dp(if (selected) 2 else 1), if (selected) highlightColor else colorOf({ scope.colors.borderColor }, 0xFF3A3F46.toInt()))
+        }
 
     fun toggle() {
         root.visibility = if (root.visibility == View.VISIBLE) View.GONE else View.VISIBLE
@@ -231,11 +336,96 @@ class AgentPanel(
         render()
     }
 
-    fun appendText(text: String) {
-        if (blocked) return
-        question.append(text)
+    // ---- 设置 ----
+
+    fun toggleSettings() {
+        if (settingsOpen) {
+            closeSettings()
+        } else {
+            openSettings()
+        }
+    }
+
+    fun openSettings() {
+        settingsOpen = true
+        field = Field.ENDPOINT
+        endpointBuf.setLength(0)
+        endpointBuf.append(AgentConfig.endpoint())
+        tokenBuf.setLength(0)
+        tokenBuf.append(AgentConfig.token())
         status = ""
         render()
+    }
+
+    fun closeSettings() {
+        settingsOpen = false
+        field = Field.QUESTION
+        render()
+    }
+
+    val isSettingsOpen: Boolean
+        get() = settingsOpen
+
+    private fun saveSettings() {
+        val endpoint = endpointBuf.toString().trim()
+        val token = tokenBuf.toString().trim()
+        if (!endpoint.startsWith("http://") && !endpoint.startsWith("https://")) {
+            setStatus("地址要以 http:// 或 https:// 开头")
+            return
+        }
+        onSaveSettings?.invoke(endpoint, token)
+        settingsOpen = false
+        field = Field.QUESTION
+        status = "已保存后端设置"
+        render()
+    }
+
+    // ---- 面板输入 ----
+
+    fun appendText(text: String) {
+        if (blocked) return
+        when {
+            settingsOpen && field == Field.ENDPOINT -> {
+                endpointBuf.append(text)
+                render()
+            }
+            settingsOpen && field == Field.TOKEN -> {
+                tokenBuf.append(text)
+                render()
+            }
+            else -> {
+                question.append(text)
+                status = ""
+                render()
+            }
+        }
+    }
+
+    fun backspace() {
+        when {
+            settingsOpen && field == Field.ENDPOINT -> {
+                if (endpointBuf.isNotEmpty()) endpointBuf.setLength(endpointBuf.length - 1)
+                render()
+            }
+            settingsOpen && field == Field.TOKEN -> {
+                if (tokenBuf.isNotEmpty()) tokenBuf.setLength(tokenBuf.length - 1)
+                render()
+            }
+            question.isNotEmpty() -> {
+                question.setLength(question.length - 1)
+                render()
+            }
+        }
+    }
+
+    /** Enter / 「发送」在设置态等价于保存。 */
+    fun submit() {
+        if (settingsOpen) {
+            saveSettings()
+        } else {
+            val text = question.toString().trim()
+            if (text.isEmpty()) setStatus("先输入一个问题，再发送") else onSend?.invoke(text)
+        }
     }
 
     /** 敏感输入域：面板只展示原因，按钮全部禁用，不接受键盘提交。 */
@@ -265,13 +455,6 @@ class AgentPanel(
     /** 宿主有选区时「插入」改称「改写」，语义是替换选区文本。 */
     fun setInsertLabel(label: String) {
         insertButton.text = label
-    }
-
-    fun backspace() {
-        if (question.isNotEmpty()) {
-            question.setLength(question.length - 1)
-            render()
-        }
     }
 
     fun setAnswer(text: String) {
@@ -316,11 +499,19 @@ class AgentPanel(
 
     fun answerText(): String = answer
 
+    fun currentEndpoint(): String = AgentConfig.endpoint()
+
     private fun panelBackground(): GradientDrawable =
         GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = dp(12).toFloat()
-            setColor(colorOf({ scope.colors.candidateBackground }, 0xFF23262B.toInt()))
+            // 强制不透明：面板下方是 trime 的 preedit/候选视图，半透明会把它们的边框透出来
+            val base = colorOf({ scope.colors.candidateBackground }, 0xFF23262B.toInt())
+            setColor(android.graphics.Color.rgb(
+                android.graphics.Color.red(base),
+                android.graphics.Color.green(base),
+                android.graphics.Color.blue(base),
+            ))
             setStroke(dp(1), colorOf({ scope.colors.borderColor }, 0xFF3A3F46.toInt()))
         }
 

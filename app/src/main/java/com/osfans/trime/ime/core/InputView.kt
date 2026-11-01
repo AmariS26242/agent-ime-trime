@@ -289,6 +289,12 @@ class InputView(
         agentPanel.onUndo = { undoAgentAnswer() }
         agentPanel.onClose = { hideAgentPanel() }
         agentPanel.onCancel = { cancelAgentRequest() }
+        agentPanel.onSaveSettings = { endpoint, token ->
+            com.osfans.trime.ime.agent.AgentConfig.init(themedContext)
+            com.osfans.trime.ime.agent.AgentConfig.save(endpoint, token)
+            android.util.Log.i("AgentDbg", "settings saved endpoint=$endpoint")
+        }
+        com.osfans.trime.ime.agent.AgentConfig.init(themedContext)
         agentPanel.root.post {
             val r = android.graphics.Rect()
             agentPanel.root.getGlobalVisibleRect(r)
@@ -322,7 +328,7 @@ class InputView(
             agentPanel.setInsertLabel(if (service.hasHostSelection()) "改写" else "插入")
             service.panelTextSink = agentPanel::appendText
             service.panelBackspaceSink = agentPanel::backspace
-            service.panelSubmitSink = { submitAgentQuestion() }
+            service.panelSubmitSink = { agentPanel.submit() }
         }
         service.onAgentPanelVisibilityChanged()
     }
