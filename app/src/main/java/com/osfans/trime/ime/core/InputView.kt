@@ -24,6 +24,7 @@ import com.osfans.trime.daemon.RimeSession
 import com.osfans.trime.data.prefs.AppPrefs
 import com.osfans.trime.data.theme.Theme
 import com.osfans.trime.data.theme.ThemeScope
+import com.osfans.trime.ime.agent.AgentPanel
 import com.osfans.trime.ime.bar.InputBarDelegate
 import com.osfans.trime.ime.broadcast.EnterKeyDisplayDelegate
 import com.osfans.trime.ime.broadcast.InputBroadcastReceiver
@@ -128,6 +129,9 @@ class InputView(
     private val inputBar: InputBarDelegate by instance()
     private val keyboardWindow: KeyboardWindow by instance()
     private val liquidWindow: LiquidWindow by instance()
+
+    /** Agent panel shown above the keyboard, see [showAgentPanel]. */
+    private val agentPanel = AgentPanel(this, scope)
 
     private val candidatesMode by AppPrefs.defaultInstance().candidates.mode
 
@@ -264,11 +268,114 @@ class InputView(
         )
 
         add(
+            agentPanel.root,
+            lParams(matchParent, wrapContent) {
+                above(keyboardView)
+                startOfParent()
+                endOfParent()
+            },
+        )
+
+        add(
             popup.root,
             lParams(matchParent, matchParent) {
                 centerInParent()
             },
         )
+
+        agentPanel.onSend = { submitAgentQuestion() }
+        agentPanel.onInsert = { insertAgentAnswer(it) }
+        agentPanel.onUndo = { undoAgentAnswer() }
+        agentPanel.onClose = { hideAgentPanel() }
+        agentPanel.root.post {
+            val r = android.graphics.Rect()
+            agentPanel.root.getGlobalVisibleRect(r)
+            android.util.Log.i(
+                "AgentDbg",
+                "panelRect=$r h=${agentPanel.root.height} w=${agentPanel.root.width} " +
+                    "vis=${agentPanel.root.visibility} inputViewH=$height " +
+                    "popupVis=${popup.root.visibility} keyboardH=${keyboardView.height}",
+            )
+        }
+    }
+
+    /** Opens the Agent panel and routes committed text into it instead of the host editor. */
+    fun showAgentPanel() {
+        agentPanel.root.visibility = View.VISIBLE
+        agentPanel.root.bringToFront()
+        agentPanel.root.post {
+            val r = android.graphics.Rect()
+            agentPanel.root.getGlobalVisibleRect(r)
+            android.util.Log.i("AgentDbg", "shownRect=$r h=${agentPanel.root.height} inputViewH=$height")
+        }
+        if (service.isSensitiveInput) {
+            // 敏感输入域：不接管键盘提交，也不允许写回宿主
+            agentPanel.enterBlockedMode("敏感输入：已禁用 AI 面板（不读取、不写入该输入框）")
+            service.panelTextSink = null
+            service.panelBackspaceSink = null
+            service.panelSubmitSink = null
+        } else {
+            agentPanel.exitBlockedMode()
+            agentPanel.setStatus("用键盘输入问题，回车或点「发送」")
+            agentPanel.setInsertLabel(if (service.hasHostSelection()) "改写" else "插入")
+            service.panelTextSink = agentPanel::appendText
+            service.panelBackspaceSink = agentPanel::backspace
+            service.panelSubmitSink = { submitAgentQuestion() }
+        }
+        service.onAgentPanelVisibilityChanged()
+    }
+
+    /** 面板顶部在窗口中的 Y 坐标（面板不可见时返回 null）。 */
+    fun agentPanelTopInWindow(): Int? {
+        if (agentPanel.root.visibility != View.VISIBLE) return null
+        val loc = IntArray(2)
+        agentPanel.root.getLocationInWindow(loc)
+        return loc[1]
+    }
+
+    fun hideAgentPanel() {
+        agentPanel.hide()
+        service.panelTextSink = null
+        service.panelBackspaceSink = null
+        service.panelSubmitSink = null
+        service.onAgentPanelVisibilityChanged()
+    }
+
+    fun toggleAgentPanel() {
+        if (agentPanel.isOpen) {
+            hideAgentPanel()
+        } else {
+            service.captureHostSelection()
+            showAgentPanel()
+        }
+    }
+
+    private fun submitAgentQuestion() {
+        val question = agentPanel.questionText().trim()
+        if (question.isEmpty()) {
+            agentPanel.setStatus("先输入一个问题，再发送")
+            return
+        }
+        agentPanel.setStatus("本地回环（尚未接入模型）")
+        agentPanel.setAnswer("收到问题：「$question」\n\n里程碑 1：Agent 面板与输入回环已打通，下一步接入后端模型。")
+    }
+
+    private fun insertAgentAnswer(text: String) {
+        val rewrite = service.hasHostSelection()
+        service.writeToHost(text)
+        agentPanel.setStatus(if (rewrite) "已改写选区（可点「撤销」还原原文）" else "已插入到输入框")
+        agentPanel.setInsertLabel("插入")
+    }
+
+    private fun undoAgentAnswer() {
+        service.undoAgentInsert()
+        agentPanel.setStatus("已撤销上一次写入")
+    }
+
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        val handled = super.dispatchTouchEvent(ev)
+        android.util.Log.i("AgentDbg", "dispatch action=${ev.action} at ${ev.x},${ev.y} handled=$handled")
+        return handled
     }
 
     private fun updateKeyboardSize() {

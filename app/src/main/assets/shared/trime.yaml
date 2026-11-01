@@ -929,6 +929,7 @@ preset_keys:
   liquid_keyboard_exit: {label: 返回, send: FUNCTION, command: liquid_keyboard, option: "-1"}  #退出liquidkeyboard
   liquid_keyboard_emoji: { label: 🙂, send: FUNCTION, command: liquid_keyboard, option: "emoji" }
   clipboard_window: { label: "剪贴", send: FUNCTION, command: "clipboard_window", option: '0' } #0剪贴板，1收藏夹
+  AGENT: { label: AI, send: FUNCTION, command: agent_window } #Agent 面板
   set_color_ink: { label: 切换到ink配色, send: FUNCTION, command: set_color_scheme, option: "ink" }
   set_theme_ink: { label: 切换到ink主题, send: FUNCTION, command: set_theme, option: "ink" } #空参数为刷新主题
   # trime設定
@@ -1024,7 +1025,8 @@ preset_keyboards:
       - {click: Shift_L}
       - {click: Keyboard_symbols, long_click: Keyboard_number}
       - {click: Mode_switch, long_click: Menu}
-      - {click: space, width: 30}
+      - {click: space, width: 25}
+      - {click: AGENT, width: 5}
       - {click: "'", long_click: '"'}
       - {click: BackSpace, width: 15}
       - {click: Return, composing: Return1, long_click: CommitComment, width: 15}
@@ -1114,7 +1116,8 @@ preset_keyboards:
     - {click: Mode_switch, long_click: Menu, width: 15}
     - {click: Keyboard_symbols, long_click: Keyboard_number}
     - {click: ',', long_click: '<'}
-    - {click: space, width: 30}
+    - {click: space, width: 25}
+    - {click: AGENT, width: 5}
     - {click: '.', long_click: '>'}
     - {click: '/', long_click: '?'}
     - {click: Return, composing: Return1, long_click: CommitComment, width: 15}
@@ -1212,7 +1215,8 @@ preset_keyboards:
     - {click: Mode_switch, long_click: Menu, width: 15}
     - {click: Keyboard_symbols, long_click: Keyboard_number}
     - {click: ',', long_click: '<'}
-    - {click: space, width: 30}
+    - {click: space, width: 25}
+    - {click: AGENT, width: 5}
     - {click: '.', long_click: '>'}
     - {click: '/', long_click: '?'}
     - {click: Return, composing: Return1, long_click: CommitComment, width: 15}

@@ -119,6 +119,7 @@ class CommonKeyboardActionListener(override val di: DI) : DIAware {
             }
 
             override fun onAction(action: KeyAction) {
+                if (service.panelTextSink != null && handlePanelKey(action)) return
                 val text = action.getText(KeyboardWindow.currentKeyboard)
                 val shouldHandle = when {
                     action.commit.isNotEmpty() -> {
@@ -146,6 +147,34 @@ class CommonKeyboardActionListener(override val di: DI) : DIAware {
                         KeyEvent.KEYCODE_VOICE_ASSIST -> switchToVoiceInputMethod()
                         else -> handleDefaultKeyAction(action)
                     }
+                }
+            }
+
+            /**
+             * Keys that the in-IME Agent panel consumes itself. Returns true when
+             * the key was handled here; text-producing keys are left to rime so
+             * pinyin composition keeps working, and their commits land in the
+             * panel through [TrimeInputMethodService.panelTextSink].
+             */
+            private fun handlePanelKey(action: KeyAction): Boolean {
+                val composing = rime.run { statusCached.isComposing }
+                return when {
+                    action.commit.isNotEmpty() -> {
+                        service.commitText(action.commit)
+                        true
+                    }
+
+                    action.code == KeyEvent.KEYCODE_DEL && !composing -> {
+                        service.panelBackspaceSink?.invoke()
+                        true
+                    }
+
+                    action.code == KeyEvent.KEYCODE_ENTER && !composing -> {
+                        service.panelSubmitSink?.invoke()
+                        true
+                    }
+
+                    else -> false
                 }
             }
 
@@ -182,6 +211,7 @@ class CommonKeyboardActionListener(override val di: DI) : DIAware {
                     "liquid_keyboard" -> handleLiquidKeyboard(arg)
                     "menu_keyboard" -> windowManager.attachWindow(SwitchOptionWindow(di))
                     "clipboard_window" -> handleClipboardWindow(arg)
+                    "agent_window" -> service.toggleAgentPanel()
                     "set_color_scheme" -> handleColorScheme(arg)
                     "set_theme" -> handleTheme(arg)
                     "broadcast" -> service.sendBroadcast(Intent(arg))

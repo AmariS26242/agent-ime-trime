@@ -479,10 +479,22 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
     override fun onComputeInsets(outInsets: Insets) {
         if (inputDeviceManager.useVirtualKeyboard) {
             inputView?.keyboardView?.getLocationInWindow(inputViewLocation)
-            outInsets.apply {
-                contentTopInsets = inputViewLocation[1]
-                visibleTopInsets = inputViewLocation[1]
-                touchableInsets = Insets.TOUCHABLE_INSETS_VISIBLE
+            val panelTop = inputView?.agentPanelTopInWindow()
+            if (panelTop != null && panelTop < inputViewLocation[1]) {
+                // 面板悬浮在键盘上方：把可触摸区域向上扩展到面板顶部，
+                // 但 contentTopInsets 仍按键盘顶部上报，避免宿主布局跳动。
+                outInsets.apply {
+                    contentTopInsets = inputViewLocation[1]
+                    visibleTopInsets = inputViewLocation[1]
+                    touchableInsets = Insets.TOUCHABLE_INSETS_REGION
+                    touchableRegion.set(0, panelTop, decorView.width, decorView.height)
+                }
+            } else {
+                outInsets.apply {
+                    contentTopInsets = inputViewLocation[1]
+                    visibleTopInsets = inputViewLocation[1]
+                    touchableInsets = Insets.TOUCHABLE_INSETS_VISIBLE
+                }
             }
         } else {
             val n = decorView.findViewById<View>(android.R.id.navigationBarBackground)?.height ?: 0
@@ -501,11 +513,30 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
 
     fun superEvaluateInputViewShown() = super.onEvaluateInputViewShown()
 
+    /** 面板显隐后需要让 IMMS 重新收集 insets（可触摸区域随面板变化）。 */
+    fun onAgentPanelVisibilityChanged() {
+        window.window?.decorView?.post {
+            updateInputViewShown()
+            window.window?.decorView?.requestApplyInsets()
+        }
+    }
+
     override fun onCreateInputView(): View? {
         Timber.d("onCreateInputView")
         val scope = themeScope
         if (scope == null) {
             Timber.w("ThemeScope is not ready yet; deferring input view creation")
+            // 修复：rime 尚未就绪时 onCreateInputView 返回 null 后不会自动重试，
+            // 结果是窗口一直空白。这里在 rime 就绪后补建输入视图。
+            lifecycleScope.launch {
+                rime.runOnReady {
+                    val ready = themeScope ?: return@runOnReady
+                    if (inputView == null) {
+                        Timber.i("agentime: creating deferred input view")
+                        replaceInputViews(ready)
+                    }
+                }
+            }
             return null
         }
         replaceInputViews(scope)
@@ -606,7 +637,88 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
         InputFeedbackManager.finishInput()
     }
 
+    /**
+     * While an in-IME panel (e.g. the Agent panel) is open, committed text is
+     * routed into that panel instead of the host editor. Reset to null to
+     * restore normal behaviour.
+     */
+    var panelTextSink: ((String) -> Unit)? = null
+    var panelBackspaceSink: (() -> Unit)? = null
+    var panelSubmitSink: (() -> Unit)? = null
+
+    fun toggleAgentPanel() {
+        inputView?.toggleAgentPanel()
+    }
+
+    /**
+     * 只把「密码类」输入域视为敏感域。
+     *
+     * 注意：不能用 `TYPE_TEXT_FLAG_NO_SUGGESTIONS` 判定（系统设置搜索框、Wi-Fi SSID 框
+     * 都带这个 flag，旧实现把它们也当敏感域，导致普通输入被强制直输、没有候选）。
+     */
+    val isSensitiveInput: Boolean
+        get() {
+            val info = currentInputEditorInfo ?: return false
+            val inputType = info.inputType
+            val cls = inputType and InputType.TYPE_MASK_CLASS
+            val variation = inputType and InputType.TYPE_MASK_VARIATION
+            return when (cls) {
+                InputType.TYPE_CLASS_TEXT -> variation == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
+                    variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
+                    variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD
+                InputType.TYPE_CLASS_NUMBER -> variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD
+                else -> false
+            }
+        }
+
+    private var lastAgentInsertLength = 0
+    private var lastReplacedText: String? = null
+
+    /** 打开面板前记录宿主选区，用来决定「插入 / 改写」并支持撤销时还原。 */
+    var hostHadSelection = false
+        private set
+
+    fun captureHostSelection() {
+        lastReplacedText = runCatching { currentInputConnection?.getSelectedText(0)?.toString() }.getOrNull()
+        hostHadSelection = !lastReplacedText.isNullOrEmpty()
+        android.util.Log.i("AgentDbg", "captureHostSelection had=$hostHadSelection len=${lastReplacedText?.length ?: 0}")
+    }
+
+    fun hasHostSelection(): Boolean = hostHadSelection
+
+    /** 写入宿主；打开面板时若有选区，commitText 会直接替换选区，即「改写」。 */
+    fun writeToHost(text: String) {
+        val ic = currentInputConnection ?: return
+        if (!hostHadSelection) lastReplacedText = null
+        ic.commitText(text, 1)
+        lastCommittedText = text
+        composingText = ""
+        lastAgentInsertLength = text.length
+    }
+
+    /** 撤销上一次 Agent 写入：删掉写入内容；若是改写，再把原文写回。 */
+    fun undoAgentInsert() {
+        if (lastAgentInsertLength <= 0) return
+        val ic = currentInputConnection ?: return
+        ic.deleteSurroundingText(lastAgentInsertLength, 0)
+        lastReplacedText?.takeIf { it.isNotEmpty() }?.let { ic.commitText(it, 1) }
+        android.util.Log.i("AgentDbg", "undo len=$lastAgentInsertLength restore=${lastReplacedText?.length ?: 0}")
+        lastReplacedText = null
+        lastAgentInsertLength = 0
+    }
+
+    /** Writes text straight to the host editor, bypassing the panel sinks. */
+    fun commitToHost(text: String) {
+        writeToHost(text)
+    }
+
     fun commitText(text: String) {
+        panelTextSink?.let { sink ->
+            sink(text)
+            lastCommittedText = text
+            composingText = ""
+            return
+        }
         val ic = currentInputConnection ?: return
 
         // when composing text equals commit content, finish composing text as-is
